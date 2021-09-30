@@ -5,3 +5,9 @@ matplotlib
 dataset
 youtube-dl
 mutagen
+librosa
+pandas
+google-api-python-client
+sox
+docopt
+psutil
