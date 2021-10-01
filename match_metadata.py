@@ -13,13 +13,31 @@ from match_salami_files import search_for_song, get_info_from_youtube, download_
 def parse_args():
 	parser = argparse.ArgumentParser(description='Search and download music on YouTube based on track metadata.')
 	parser.add_argument('input', type=str, help='Input csv file with columns: track_id, title, artist_name, duration')
-	parser.add_argument('--max-results', type=int, help="Maximum number of search results to consider (default is 10).", default=10)
+	parser.add_argument('--max-results', type=int, help="Maximum number of search results to consider.", default=10)
 	parser.add_argument('--report-file', type=str, help="csv file of processed files and results. Used to continue previous sessions", default='.match_metadata')
+	parser.add_argument('--interactive', action="store_true", help="Select candidates interactively.", default=False)
+	parser.add_argument('--duration-similarity-threshold', type=float, help="Duration similarity filter threshold.", default=0.95)
+	parser.add_argument('--metadata-similarity-threshold', type=float, help="Metadata similarity filter threshold..", default=0.8)
 	args = parser.parse_args()
 	return args
 
+def inputNumber(message):
+  while True:
+    try:
+       userInput = int(input(message))
+    except ValueError:
+       print("Not an integer! Try again.")
+       continue
+    else:
+       return userInput
+       break
+
 def duration_similarity(x,y):
-	return 1.0 - min(1.0, np.abs(x-y)/5.0)
+	return (x+y)/(np.abs(x-y)+x+y)
+
+def metadata_similarity(x,y):
+	distance = Levenshtein.distance(x.lower(), y.lower())
+	return 1 - (distance/max(len(x), len(y)))
 
 def postprocess_result(search_responses, query, duration):
 	df = pd.DataFrame(columns=['vid', 'rank', 'artist', 'title', 'duration', 'duration_similarity', 'metadata_similarity'])
@@ -28,10 +46,7 @@ def postprocess_result(search_responses, query, duration):
 			vid = item['id']['videoId']
 			rank = item['rank']
 			more_info = get_info_from_youtube(vid)
-			ref_metadata = query.lower()
-			track_metadata = f'{more_info["artist"]} {more_info["track"]}'.lower()
-			distance = Levenshtein.distance(ref_metadata, track_metadata)
-			msim = 1 - (distance/max(len(ref_metadata), len(track_metadata)))
+			msim = metadata_similarity(query, f'{more_info["artist"]} {more_info["track"]}')
 			dsim = duration_similarity(duration, more_info['duration'])
 			df.loc[i] = [vid,rank, more_info['artist'], more_info['track'], more_info['duration'], dsim, msim]
 		except (KeyboardInterrupt):
@@ -57,7 +72,7 @@ def main(argv):
 			print(f'Skipping track {row["track_id"]}')
 			continue
 
-		print(f'Searching track #{i}: {row["artist_name"]} / {row["title"]}')
+		print(f'Searching track #{i}: {row["artist_name"]} / {row["title"]} ({row["duration"]}s)')
 
 		query = f'{row["artist_name"]} {row["title"]}'
 		search_responses = search_for_song(query, maxResults=args.max_results)
@@ -68,8 +83,16 @@ def main(argv):
 			report.to_csv(args.report_file, mode='a', header=False, index=False)
 			continue
 
-		shortlist = df[(df.duration_similarity > 0) & (df.metadata_similarity > 0.8)]
-		shortlist = shortlist.sort_values(by=['duration_similarity', 'metadata_similarity'], ascending=False)
+		shortlist = pd.DataFrame()
+		if args.interactive:
+			print(df[['artist', 'title', 'duration', 'duration_similarity', 'metadata_similarity']])
+			selection = inputNumber("Select candidate (-1 to skip): ")
+			if selection < 0 or selection > len(df):
+				continue
+			shortlist = df.iloc[[selection]]
+		else:
+			shortlist = df[(df.duration_similarity > args.duration_similarity_threshold) & (df.metadata_similarity > args.metadata_similarity_threshold)]
+			shortlist = shortlist.sort_values(by=['duration_similarity', 'metadata_similarity'], ascending=False)
 		if shortlist.empty:
 			print(f'Empty shortlist')
 			report = pd.DataFrame([{'track_id': row['track_id'], 'title':'', 'artist':'', 'vid': 'not found', 'mp3': 'empty shortlist'}])
@@ -82,6 +105,7 @@ def main(argv):
 			print(f'Error downloading track #{i}: {row["artist_name"]} / {row["title"]}')
 			report = pd.DataFrame([{'track_id': row['track_id'], 'title':'', 'artist':'', 'vid': 'not found', 'mp3': 'error downloading track'}])
 			report.to_csv(args.report_file, mode='a', header=False, index=False)
+			continue
 
 		mp3 = (Path(downloaded_audio_folder)/Path(vid)).with_suffix('.mp3')
 		mp3.rename((Path(downloaded_audio_folder)/Path(row['track_id']).with_suffix('.mp3')))
