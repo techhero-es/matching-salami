@@ -11,3 +11,5 @@ google-api-python-client
 sox
 docopt
 psutil
+Levenshtein
+tqdm
