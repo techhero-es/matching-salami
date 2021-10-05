@@ -10,13 +10,16 @@ from pathlib import Path
 
 from match_salami_files import search_for_song, get_info_from_youtube, download_and_report, downloaded_audio_folder
 
+pd.set_option('display.width', 200)
+pd.set_option('display.max_columns', None)
+
 def parse_args():
 	parser = argparse.ArgumentParser(description='Search and download music on YouTube based on track metadata.')
 	parser.add_argument('input', type=str, help='Input csv file with columns: track_id, title, artist_name, duration')
 	parser.add_argument('--max-results', type=int, help="Maximum number of search results to consider.", default=10)
 	parser.add_argument('--report-file', type=str, help="csv file of processed files and results. Used to continue previous sessions", default='.match_metadata')
 	parser.add_argument('--interactive', action="store_true", help="Select candidates interactively.", default=False)
-	parser.add_argument('--duration-similarity-threshold', type=float, help="Duration similarity filter threshold.", default=0.95)
+	parser.add_argument('--duration-margin', type=float, help="Duration margin in seconds.", default=5)
 	parser.add_argument('--metadata-similarity-threshold', type=float, help="Metadata similarity filter threshold..", default=0.8)
 	args = parser.parse_args()
 	return args
@@ -32,14 +35,14 @@ def inputNumber(message):
        return userInput
        break
 
-def duration_similarity(x,y):
-	return (x+y)/(np.abs(x-y)+x+y)
+def duration_similarity(x,y,margin):
+	return 1.0 - min(1.0, np.abs(x-y)/margin)
 
 def metadata_similarity(x,y):
 	distance = Levenshtein.distance(x.lower(), y.lower())
 	return 1 - (distance/max(len(x), len(y)))
 
-def postprocess_result(search_responses, query, duration):
+def postprocess_result(search_responses, query, duration, duration_margin):
 	df = pd.DataFrame(columns=['vid', 'rank', 'artist', 'title', 'duration', 'duration_similarity', 'metadata_similarity'])
 	for i,item in enumerate(search_responses['items']):
 		try:
@@ -47,7 +50,7 @@ def postprocess_result(search_responses, query, duration):
 			rank = item['rank']
 			more_info = get_info_from_youtube(vid)
 			msim = metadata_similarity(query, f'{more_info["artist"]} {more_info["track"]}')
-			dsim = duration_similarity(duration, more_info['duration'])
+			dsim = duration_similarity(duration, more_info['duration'], duration_margin)
 			df.loc[i] = [vid,rank, more_info['artist'], more_info['track'], more_info['duration'], dsim, msim]
 		except (KeyboardInterrupt):
 			raise
@@ -76,7 +79,7 @@ def main(argv):
 
 		query = f'{row["artist_name"]} {row["title"]}'
 		search_responses = search_for_song(query, maxResults=args.max_results)
-		df = postprocess_result(search_responses, query, row["duration"])
+		df = postprocess_result(search_responses, query, row["duration"], args.duration_margin)
 		if df.empty:
 			print(f'No match for track #{i}: {row["artist_name"]} / {row["title"]}')
 			report = pd.DataFrame([{'track_id': row['track_id'], 'title':'', 'artist':'', 'vid': 'not found', 'mp3': ''}])
@@ -88,10 +91,12 @@ def main(argv):
 			print(df[['artist', 'title', 'duration', 'duration_similarity', 'metadata_similarity']])
 			selection = inputNumber("Select candidate (-1 to skip): ")
 			if selection < 0 or selection > len(df):
+				report = pd.DataFrame([{'track_id': row['track_id'], 'title':'', 'artist':'', 'vid': 'not found', 'mp3': 'interactive'}])
+				report.to_csv(args.report_file, mode='a', header=False, index=False)
 				continue
 			shortlist = df.iloc[[selection]]
 		else:
-			shortlist = df[(df.duration_similarity > args.duration_similarity_threshold) & (df.metadata_similarity > args.metadata_similarity_threshold)]
+			shortlist = df[(df.duration_similarity > 0) & (df.metadata_similarity > args.metadata_similarity_threshold)]
 			shortlist = shortlist.sort_values(by=['duration_similarity', 'metadata_similarity'], ascending=False)
 		if shortlist.empty:
 			print(f'Empty shortlist')
