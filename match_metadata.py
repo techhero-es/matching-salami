@@ -88,6 +88,7 @@ def main(argv):
 
 		shortlist = pd.DataFrame()
 		if args.interactive:
+			df = df.sort_values(by=['duration_similarity', 'metadata_similarity'], ascending=False)
 			print(df[['artist', 'title', 'duration', 'duration_similarity', 'metadata_similarity']])
 			selection = inputNumber("Select candidate (-1 to skip): ")
 			if selection < 0 or selection > len(df):
